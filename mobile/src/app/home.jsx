@@ -1,12 +1,26 @@
 import React, { useEffect, useState } from 'react';
-import { 
-  View, Text, TouchableOpacity, FlatList, ActivityIndicator, 
-  Modal, TextInput, ScrollView, Alert, KeyboardAvoidingView, Platform 
-} from 'react-native';
+import { FlatList, Alert, ScrollView, Modal, TouchableOpacity } from 'react-native';
 import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import api from '../services/api';
+import { Ionicons } from '@expo/vector-icons';
+import {
+  initDatabase,
+  getTransacoesLocal, getExcluidasLocal, getResumoLocal,
+  criarTransacao, excluirTransacao, restaurarTransacao,
+} from '../services/database';
+
+import { Box } from '@/components/ui/box';
+import { VStack } from '@/components/ui/vstack';
+import { HStack } from '@/components/ui/hstack';
+import { Text } from '@/components/ui/text';
+import { Heading } from '@/components/ui/heading';
+import { Button, ButtonText } from '@/components/ui/button';
+import { Input, InputField } from '@/components/ui/input';
+import { Spinner } from '@/components/ui/spinner';
+
+const MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
+               'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
 const CATEGORIAS = {
   receita: ['Salário', 'Freelance', 'Investimentos', 'Aluguel', 'Outros'],
@@ -19,99 +33,141 @@ export default function HomeScreen() {
   const [resumo, setResumo] = useState({ receitas: 0, despesas: 0, saldo: 0 });
   const [loading, setLoading] = useState(true);
   const [nome, setNome] = useState('');
-  
-  // Abas
-  const [aba, setAba] = useState('ativas'); 
-
-  // Modal
-  const [modalVisible, setModalVisible] = useState(false);
+  const [email, setEmail] = useState('');
+  const [aba, setAba] = useState('ativas');
+  const [isDark, setIsDark] = useState(true);
+  const [showActionsheet, setShowActionsheet] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const hoje = new Date();
+  const [mesSelecionado, setMesSelecionado] = useState(hoje.getMonth() + 1);
+  const [anoSelecionado, setAnoSelecionado] = useState(hoje.getFullYear());
   const [novaTransacao, setNovaTransacao] = useState({
     tipo: 'despesa',
     categoria: '',
     valor: '',
     descricao: '',
     data: new Date().toISOString().split('T')[0],
+    parcelar: false,
+    numeroParcelas: '2',
+    recorrente: false,
+    mesesRecorrencia: '12',
   });
 
+  const theme = isDark ? {
+    pageBg: 'bg-slate-950',
+    navBg: 'bg-slate-900/50 border-b border-slate-800/80',
+    cardBg: 'bg-slate-900 border border-slate-800',
+    tabBg: 'bg-slate-900/60 border border-slate-800/60',
+    itemBg: 'bg-slate-900/50 border border-slate-800/80',
+    inputCls: 'rounded-2xl border-slate-800 bg-slate-950/50',
+    modalBg: 'bg-slate-900',
+    modalBorder: 'border-t border-slate-800',
+    text: 'text-white',
+    textMuted: 'text-slate-400',
+    textSubtle: 'text-slate-500',
+    divider: 'bg-slate-800/80',
+    dragHandle: 'bg-slate-700',
+    emptyText: 'text-slate-600',
+    borderInactive: 'border-slate-800',
+    logoutBtnCls: 'border-slate-800 bg-slate-900/30',
+    saldoBorderL: 'border-slate-800/80',
+    tagReceita: 'bg-emerald-950/30 border border-emerald-500/20',
+    tagDespesa: 'bg-rose-950/30 border border-rose-500/20',
+    tagReceitaText: 'text-emerald-400',
+    tagDespesaText: 'text-rose-400',
+    toggleIcon: 'sunny-outline',
+    toggleColor: '#fbbf24',
+    placeholder: '#475569',
+  } : {
+    pageBg: 'bg-gray-50',
+    navBg: 'bg-white border-b border-gray-200',
+    cardBg: 'bg-white border border-gray-200',
+    tabBg: 'bg-gray-100 border border-gray-200',
+    itemBg: 'bg-white border border-gray-200',
+    inputCls: 'rounded-2xl border-gray-300 bg-white',
+    modalBg: 'bg-white',
+    modalBorder: 'border-t border-gray-200',
+    text: 'text-gray-900',
+    textMuted: 'text-gray-500',
+    textSubtle: 'text-gray-400',
+    divider: 'bg-gray-200',
+    dragHandle: 'bg-gray-300',
+    emptyText: 'text-gray-400',
+    borderInactive: 'border-gray-200',
+    logoutBtnCls: 'border-gray-200 bg-gray-100',
+    saldoBorderL: 'border-gray-200',
+    tagReceita: 'bg-emerald-100 border border-emerald-300',
+    tagDespesa: 'bg-rose-100 border border-rose-300',
+    tagReceitaText: 'text-emerald-600',
+    tagDespesaText: 'text-rose-600',
+    toggleIcon: 'moon-outline',
+    toggleColor: '#6366f1',
+    placeholder: '#94a3b8',
+  };
+
   useEffect(() => {
-    const loadNome = async () => setNome(await AsyncStorage.getItem('nome') || '');
-    loadNome();
-    carregarDados();
+    const init = async () => {
+      const [savedNome, savedEmail] = await Promise.all([
+        AsyncStorage.getItem('nome'),
+        AsyncStorage.getItem('email'),
+      ]);
+      const em = savedEmail || '';
+      setNome(savedNome || '');
+      setEmail(em);
+      await initDatabase();
+      await carregarDados(mesSelecionado, anoSelecionado, em);
+    };
+    init();
   }, []);
 
-  const carregarDados = async () => {
+  useEffect(() => {
+    if (email) carregarDados(mesSelecionado, anoSelecionado, email);
+  }, [mesSelecionado, anoSelecionado]);
+
+  const carregarDados = async (mes, ano, emailParam) => {
+    const em = emailParam ?? email;
     try {
-      const mes = new Date().getMonth() + 1;
-      const ano = new Date().getFullYear();
-      const [resResumo, resTransacoes, resExcluidas] = await Promise.all([
-        api.get(`/transacoes/resumo?mes=${mes}&ano=${ano}`),
-        api.get(`/transacoes?mes=${mes}&ano=${ano}`),
-        api.get(`/transacoes/excluidos?mes=${mes}&ano=${ano}`)
+      const [resumo, ativas, excluidas] = await Promise.all([
+        getResumoLocal(em, mes, ano),
+        getTransacoesLocal(em, mes, ano),
+        getExcluidasLocal(em, mes, ano),
       ]);
-      setResumo(resResumo.data);
-      setTransacoes(resTransacoes.data);
-      setTransacoesExcluidas(resExcluidas.data);
+      setResumo(resumo);
+      setTransacoes(ativas);
+      setTransacoesExcluidas(excluidas);
     } catch (err) {
-      if (err.response?.status === 401 || err.response?.status === 403) {
-        handleLogout();
-      }
+      console.error('Erro ao carregar dados locais:', err);
     } finally {
       setLoading(false);
     }
   };
 
   const handleLogout = async () => {
-    await AsyncStorage.clear();
+    await AsyncStorage.multiRemove(['token', 'nome', 'email']);
     router.replace('/');
   };
 
-  const handleAdicionar = async () => {
-    if (!novaTransacao.categoria || !novaTransacao.valor || !novaTransacao.data) {
-      Alert.alert('Aviso', 'Preencha o valor, a data e selecione uma categoria.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      await api.post('/transacoes', novaTransacao);
-      setNovaTransacao({
-        tipo: 'despesa', categoria: '', valor: '', descricao: '',
-        data: new Date().toISOString().split('T')[0],
-      });
-      setModalVisible(false);
-      carregarDados();
-    } catch (err) {
-      Alert.alert('Erro', err.response?.data?.erro || 'Erro ao adicionar transação');
-    } finally {
-      setSubmitting(false);
-    }
+  const irMesAnterior = () => {
+    if (mesSelecionado === 1) { setMesSelecionado(12); setAnoSelecionado(a => a - 1); }
+    else { setMesSelecionado(m => m - 1); }
   };
 
-  const handleDeletar = async (id) => {
-    Alert.alert('Atenção', 'Deseja mover esta transação para a lixeira?', [
-      { text: 'Cancelar', style: 'cancel' },
-      { 
-        text: 'Sim, deletar', 
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await api.delete(`/transacoes/${id}`);
-            carregarDados();
-          } catch (err) {
-            Alert.alert('Erro', 'Erro ao remover transação');
-          }
-        }
-      }
-    ]);
+  const irProximoMes = () => {
+    if (mesSelecionado === 12) { setMesSelecionado(1); setAnoSelecionado(a => a + 1); }
+    else { setMesSelecionado(m => m + 1); }
   };
 
-  const handleRestaurar = async (id) => {
-    try {
-      await api.patch(`/transacoes/${id}/restaurar`);
-      carregarDados();
-    } catch {
-      Alert.alert('Erro', 'Erro ao restaurar transação');
-    }
+  const defaultData = () => {
+    const h = new Date();
+    if (mesSelecionado === h.getMonth() + 1 && anoSelecionado === h.getFullYear())
+      return h.toISOString().split('T')[0];
+    return `${anoSelecionado}-${String(mesSelecionado).padStart(2, '0')}-01`;
+  };
+
+  const addMonths = (dateStr, months) => {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const date = new Date(y, m - 1 + months, d);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   };
 
   const formatarMoeda = (valor) => {
@@ -128,214 +184,471 @@ export default function HomeScreen() {
     setNovaTransacao({ ...novaTransacao, valor: valorFloat });
   };
 
+  const resetForm = () => {
+    setNovaTransacao({
+      tipo: 'despesa', categoria: '', valor: '', descricao: '',
+      data: defaultData(),
+      parcelar: false, numeroParcelas: '2',
+      recorrente: false, mesesRecorrencia: '12',
+    });
+  };
+
+  const handleAdicionar = async () => {
+    if (!novaTransacao.categoria || !novaTransacao.valor || !novaTransacao.data) {
+      Alert.alert('Aviso', 'Preencha o valor, a data e selecione uma categoria.');
+      return;
+    }
+
+    const isParcelas = novaTransacao.tipo === 'despesa' && novaTransacao.parcelar;
+    const isRecorrente = novaTransacao.tipo === 'receita' && novaTransacao.recorrente;
+    const n = isParcelas ? parseInt(novaTransacao.numeroParcelas, 10) || 1
+             : isRecorrente ? parseInt(novaTransacao.mesesRecorrencia, 10) || 1
+             : 1;
+
+    if (n < 1 || n > 60) {
+      Alert.alert('Aviso', 'Informe um número entre 1 e 60.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      if (isParcelas) {
+        const valorParcela = (parseFloat(novaTransacao.valor) / n).toFixed(2);
+        for (let i = 0; i < n; i++) {
+          await criarTransacao(email, {
+            tipo: 'despesa',
+            categoria: novaTransacao.categoria,
+            valor: valorParcela,
+            descricao: `${novaTransacao.descricao ? novaTransacao.descricao + ' ' : ''}(${i + 1}/${n})`,
+            data: addMonths(novaTransacao.data, i),
+          });
+        }
+      } else if (isRecorrente) {
+        for (let i = 0; i < n; i++) {
+          await criarTransacao(email, {
+            tipo: 'receita',
+            categoria: novaTransacao.categoria,
+            valor: novaTransacao.valor,
+            descricao: novaTransacao.descricao || '',
+            data: addMonths(novaTransacao.data, i),
+          });
+        }
+      } else {
+        await criarTransacao(email, {
+          tipo: novaTransacao.tipo,
+          categoria: novaTransacao.categoria,
+          valor: novaTransacao.valor,
+          descricao: novaTransacao.descricao,
+          data: novaTransacao.data,
+        });
+      }
+      resetForm();
+      setShowActionsheet(false);
+      carregarDados(mesSelecionado, anoSelecionado);
+    } catch (err) {
+      Alert.alert('Erro', 'Erro ao salvar transação');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDeletar = async (id) => {
+    Alert.alert('Atenção', 'Deseja mover esta transação para a lixeira?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Sim, deletar',
+        style: 'destructive',
+        onPress: async () => {
+          await excluirTransacao(id);
+          carregarDados(mesSelecionado, anoSelecionado);
+        }
+      }
+    ]);
+  };
+
+  const handleRestaurar = async (id) => {
+    await restaurarTransacao(id);
+    carregarDados(mesSelecionado, anoSelecionado);
+  };
+
   if (loading) {
     return (
-      <View className="flex-1 justify-center items-center bg-slate-50 dark:bg-slate-950">
-        <ActivityIndicator size="large" color="#2563eb" />
-      </View>
+      <Box className={`flex-1 justify-center items-center ${theme.pageBg}`}>
+        <Spinner size="large" className="text-blue-500" />
+      </Box>
     );
   }
 
   const transacoesExibidas = aba === 'ativas' ? transacoes : transacoesExcluidas;
 
   return (
-    <SafeAreaView className="flex-1 bg-slate-50 dark:bg-slate-950">
-      <View className="px-6 py-4 flex-row justify-between items-center bg-white dark:bg-slate-900 shadow-sm border-b border-slate-200 dark:border-slate-800">
-        <View className="flex-row items-center gap-3">
-          <View className="h-10 w-10 bg-blue-600 rounded-full items-center justify-center">
-            <Text className="text-white font-bold">{nome.charAt(0).toUpperCase()}</Text>
-          </View>
-          <Text className="text-xl font-bold text-slate-900 dark:text-white">Olá, {nome.split(' ')[0]}</Text>
-        </View>
-        <TouchableOpacity onPress={handleLogout} className="bg-red-100 dark:bg-red-900/30 px-3 py-1.5 rounded-lg">
-          <Text className="text-red-600 dark:text-red-400 font-semibold text-sm">Sair</Text>
-        </TouchableOpacity>
-      </View>
-      
-      <View className="flex-1 px-6 pt-6">
-        {/* Card Resumo */}
-        <View className="bg-blue-600 rounded-3xl p-6 shadow-xl shadow-blue-500/40 mb-6">
-          <Text className="text-blue-100 font-medium text-sm">Saldo Atual</Text>
-          <Text className="text-4xl font-bold text-white mt-1 tracking-tight">{formatarMoeda(resumo.saldo)}</Text>
-          <View className="flex-row mt-6 gap-8">
-            <View>
-              <Text className="text-blue-200 text-xs mb-1">Receitas</Text>
-              <Text className="text-white font-semibold text-base">{formatarMoeda(resumo.receitas)}</Text>
-            </View>
-            <View>
-              <Text className="text-blue-200 text-xs mb-1">Despesas</Text>
-              <Text className="text-white font-semibold text-base">{formatarMoeda(resumo.despesas)}</Text>
-            </View>
-          </View>
-        </View>
-        
+    <SafeAreaView className={`flex-1 ${theme.pageBg}`}>
+      {/* Navbar */}
+      <HStack className={`px-6 py-5 justify-between items-center ${theme.navBg}`}>
+        <HStack className="items-center" space="md">
+          <Box
+            className="h-11 w-11 rounded-full items-center justify-center border-2 border-blue-400/20"
+            style={{ backgroundColor: '#2563eb' }}
+          >
+            <Text className="text-white font-bold text-lg">{nome.charAt(0).toUpperCase()}</Text>
+          </Box>
+          <VStack space="xs">
+            <Text className={`${theme.textMuted} text-xs font-semibold uppercase tracking-wider`}>Dashboard</Text>
+            <Heading size="md" className={`${theme.text} font-extrabold tracking-tight`}>Olá, {nome.split(' ')[0]}</Heading>
+          </VStack>
+        </HStack>
+        <HStack space="sm" className="items-center">
+          <TouchableOpacity
+            onPress={() => setIsDark(d => !d)}
+            style={{ padding: 8, borderRadius: 10 }}
+          >
+            <Ionicons name={theme.toggleIcon} size={22} color={theme.toggleColor} />
+          </TouchableOpacity>
+          <Button
+            variant="outline"
+            size="sm"
+            onPress={handleLogout}
+            className={`rounded-xl ${theme.logoutBtnCls}`}
+          >
+            <ButtonText className="text-red-400 font-semibold text-xs">Sair</ButtonText>
+          </Button>
+        </HStack>
+      </HStack>
+
+      <Box className="flex-1 px-6 pt-6">
+        {/* Seletor de Mês */}
+        <HStack className="items-center justify-between mb-4">
+          <TouchableOpacity onPress={irMesAnterior} style={{ padding: 8 }}>
+            <Ionicons name="chevron-back" size={22} color={isDark ? '#94a3b8' : '#6b7280'} />
+          </TouchableOpacity>
+          <VStack className="items-center">
+            <Text className={`font-extrabold text-base ${theme.text}`}>
+              {MESES[mesSelecionado - 1]}
+            </Text>
+            <Text className={`text-xs ${theme.textMuted}`}>{anoSelecionado}</Text>
+          </VStack>
+          <TouchableOpacity onPress={irProximoMes} style={{ padding: 8 }}>
+            <Ionicons name="chevron-forward" size={22} color={isDark ? '#94a3b8' : '#6b7280'} />
+          </TouchableOpacity>
+        </HStack>
+
+        {/* Card Saldo */}
+        <Box className={`${theme.cardBg} rounded-3xl p-6 shadow-2xl relative overflow-hidden mb-6`}>
+          <Text className={`${theme.textMuted} font-medium text-xs uppercase tracking-wider`}>Saldo Total Disponível</Text>
+          <Heading size="3xl" className={`${theme.text} mt-2 font-black tracking-tight`}>
+            {formatarMoeda(resumo.saldo)}
+          </Heading>
+          <Box className={`h-[1px] ${theme.divider} my-5`} />
+          <HStack className="justify-between" space="xl">
+            <VStack space="xs" className="flex-1">
+              <HStack space="xs" className="items-center">
+                <Box className="h-2 w-2 rounded-full bg-emerald-500" />
+                <Text className={`${theme.textMuted} text-xs uppercase tracking-wider`}>Receitas</Text>
+              </HStack>
+              <Text className="text-emerald-400 font-bold text-lg">{formatarMoeda(resumo.receitas)}</Text>
+            </VStack>
+            <VStack space="xs" className={`flex-1 border-l ${theme.saldoBorderL} pl-6`}>
+              <HStack space="xs" className="items-center">
+                <Box className="h-2 w-2 rounded-full bg-rose-500" />
+                <Text className={`${theme.textMuted} text-xs uppercase tracking-wider`}>Despesas</Text>
+              </HStack>
+              <Text className="text-rose-400 font-bold text-lg">{formatarMoeda(resumo.despesas)}</Text>
+            </VStack>
+          </HStack>
+        </Box>
+
         {/* Abas */}
-        <View className="flex-row gap-4 mb-4">
-          <TouchableOpacity 
-            className={`pb-2 border-b-2 ${aba === 'ativas' ? 'border-blue-600' : 'border-transparent'}`}
+        <HStack className={`${theme.tabBg} p-1.5 rounded-2xl mb-6`}>
+          <Button
             onPress={() => setAba('ativas')}
+            className={`flex-1 rounded-xl py-2.5 ${aba === 'ativas' ? 'bg-blue-600' : 'bg-transparent'}`}
           >
-            <Text className={`font-bold ${aba === 'ativas' ? 'text-blue-600 dark:text-blue-400' : 'text-slate-500'}`}>Ativas</Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            className={`pb-2 border-b-2 ${aba === 'excluidas' ? 'border-red-600' : 'border-transparent'}`}
+            <ButtonText className={`font-bold text-sm ${aba === 'ativas' ? 'text-white' : theme.textMuted}`}>Fluxo de Caixa</ButtonText>
+          </Button>
+          <Button
             onPress={() => setAba('excluidas')}
+            className={`flex-1 rounded-xl py-2.5 ${aba === 'excluidas' ? 'bg-rose-600' : 'bg-transparent'}`}
           >
-            <Text className={`font-bold ${aba === 'excluidas' ? 'text-red-600 dark:text-red-400' : 'text-slate-500'}`}>Lixeira</Text>
-          </TouchableOpacity>
-        </View>
-        
-        {/* Lista */}
+            <ButtonText className={`font-bold text-sm ${aba === 'excluidas' ? 'text-white' : theme.textMuted}`}>Lixeira</ButtonText>
+          </Button>
+        </HStack>
+
+        {/* Lista de Transações */}
         <FlatList
           data={transacoesExibidas}
-          keyExtractor={t => t.id.toString()}
+          keyExtractor={item => item.id.toString()}
           showsVerticalScrollIndicator={false}
-          ListEmptyComponent={<Text className="text-slate-500 mt-10 text-center">Nenhuma transação na aba atual.</Text>}
-          renderItem={({item}) => (
-            <View className={`flex-row items-center justify-between bg-white dark:bg-slate-900 p-4 rounded-2xl mb-3 shadow-sm border border-slate-100 dark:border-slate-800 ${aba === 'excluidas' ? 'opacity-70' : ''}`}>
-              <View className="flex-row items-center gap-3 flex-1">
-                <View className={`h-10 w-10 rounded-full items-center justify-center ${item.tipo === 'receita' ? 'bg-green-100 dark:bg-green-900/30' : 'bg-red-100 dark:bg-red-900/30'}`}>
-                  <Text className={item.tipo === 'receita' ? 'text-green-600 dark:text-green-400 font-bold' : 'text-red-600 dark:text-red-400 font-bold'}>
-                    {item.tipo === 'receita' ? '↑' : '↓'}
+          contentContainerStyle={{ paddingBottom: aba === 'ativas' ? 96 : 16 }}
+          ListEmptyComponent={
+            <VStack className="items-center justify-center py-16" space="md">
+              <Text className={`${theme.emptyText} text-lg`}>Nenhuma transação encontrada</Text>
+            </VStack>
+          }
+          renderItem={({ item }) => (
+            <HStack className={`items-center justify-between ${theme.itemBg} p-4 rounded-2xl mb-3 ${aba === 'excluidas' ? 'opacity-75' : ''}`}>
+              <HStack className="items-center flex-1" space="md">
+                <Box className={`h-11 w-11 rounded-xl items-center justify-center ${item.tipo === 'receita' ? theme.tagReceita : theme.tagDespesa}`}>
+                  <Text className={`font-black text-lg ${item.tipo === 'receita' ? theme.tagReceitaText : theme.tagDespesaText}`}>
+                    {item.tipo === 'receita' ? '+' : '-'}
                   </Text>
-                </View>
-                <View className="flex-1">
-                  <Text className="font-semibold text-slate-900 dark:text-white text-base">{item.categoria}</Text>
-                  {item.descricao ? <Text className="text-slate-400 text-xs" numberOfLines={1}>{item.descricao}</Text> : null}
-                  <Text className="text-slate-500 text-xs mt-0.5">{new Date(item.data).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}</Text>
-                </View>
-              </View>
-              
-              <View className="items-end gap-2">
-                <Text className={`font-bold text-base ${item.tipo === 'receita' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                  {item.tipo === 'receita' ? '+' : '-'} {formatarMoeda(item.valor).replace(/^R\$\s*/, 'R$ ')}
+                </Box>
+                <VStack className="flex-1" space="xs">
+                  <Text className={`font-bold ${theme.text} text-base leading-tight`}>{item.categoria}</Text>
+                  {item.descricao ? <Text className={`${theme.textMuted} text-xs`} numberOfLines={1}>{item.descricao}</Text> : null}
+                  <Text className={`${theme.textSubtle} text-[10px] font-semibold uppercase tracking-wider`}>
+                    {new Date(item.data).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}
+                  </Text>
+                </VStack>
+              </HStack>
+              <VStack className="items-end" space="sm">
+                <Text className={`font-black text-base ${item.tipo === 'receita' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {formatarMoeda(item.valor)}
                 </Text>
-                
                 {aba === 'ativas' ? (
-                  <TouchableOpacity onPress={() => handleDeletar(item.id)} className="bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-md">
-                    <Text className="text-red-500 text-xs font-semibold">Excluir</Text>
-                  </TouchableOpacity>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    className="rounded-lg border-rose-950 px-2 py-1 h-7"
+                    onPress={() => handleDeletar(item.id)}
+                  >
+                    <ButtonText className="text-rose-400 text-[10px] font-bold">EXCLUIR</ButtonText>
+                  </Button>
                 ) : (
-                  <TouchableOpacity onPress={() => handleRestaurar(item.id)} className="bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-md">
-                    <Text className="text-blue-500 text-xs font-semibold">Restaurar</Text>
-                  </TouchableOpacity>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    className="rounded-lg border-blue-950 px-2 py-1 h-7"
+                    onPress={() => handleRestaurar(item.id)}
+                  >
+                    <ButtonText className="text-blue-400 text-[10px] font-bold">RESTAURAR</ButtonText>
+                  </Button>
                 )}
-              </View>
-            </View>
+              </VStack>
+            </HStack>
           )}
         />
-      </View>
+      </Box>
 
-      {/* Floating Action Button */}
-      <TouchableOpacity 
-        className="absolute bottom-6 right-6 h-14 w-14 bg-blue-600 rounded-full items-center justify-center shadow-lg shadow-blue-500/50"
-        activeOpacity={0.8}
-        onPress={() => setModalVisible(true)}
-      >
-        <Text className="text-white text-3xl font-light mb-1">+</Text>
-      </TouchableOpacity>
+      {/* FAB — visível apenas na aba de ativos */}
+      {aba === 'ativas' && (
+        <TouchableOpacity
+          onPress={() => setShowActionsheet(true)}
+          activeOpacity={0.8}
+          style={{
+            position: 'absolute',
+            bottom: 24,
+            right: 24,
+            width: 56,
+            height: 56,
+            borderRadius: 16,
+            backgroundColor: '#2563eb',
+            alignItems: 'center',
+            justifyContent: 'center',
+            shadowColor: '#2563eb',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.4,
+            shadowRadius: 8,
+            elevation: 8,
+          }}
+        >
+          <Ionicons name="add" size={28} color="white" />
+        </TouchableOpacity>
+      )}
 
       {/* Modal Nova Transação */}
-      <Modal visible={modalVisible} animationType="slide" transparent>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} className="flex-1 justify-end bg-black/50">
-          <View className="bg-white dark:bg-slate-900 rounded-t-3xl p-6 h-[85%]">
-            <View className="flex-row justify-between items-center mb-6">
-              <Text className="text-2xl font-bold text-slate-900 dark:text-white">Nova Transação</Text>
-              <TouchableOpacity onPress={() => setModalVisible(false)} className="bg-slate-100 dark:bg-slate-800 h-8 w-8 rounded-full items-center justify-center">
-                <Text className="text-slate-500 font-bold">X</Text>
-              </TouchableOpacity>
-            </View>
+      <Modal
+        visible={showActionsheet}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowActionsheet(false)}
+      >
+        <Box className="flex-1 justify-end" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            activeOpacity={1}
+            onPress={() => setShowActionsheet(false)}
+          />
+          <Box className={`${theme.modalBg} ${theme.modalBorder} rounded-t-3xl`} style={{ maxHeight: '90%' }}>
+            <Box className="w-full py-3 items-center">
+              <Box className={`w-16 h-1.5 ${theme.dragHandle} rounded-full`} />
+            </Box>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 40 }}
+            >
+              <VStack space="xl" className="w-full">
 
-            <ScrollView showsVerticalScrollIndicator={false} className="space-y-6">
-              {/* Tipo */}
-              <View>
-                <Text className="font-semibold text-slate-700 dark:text-slate-300 mb-2">Tipo de Registro</Text>
-                <View className="flex-row gap-3">
-                  <TouchableOpacity 
-                    className={`flex-1 py-3 rounded-xl border-2 items-center ${novaTransacao.tipo === 'despesa' ? 'border-red-500 bg-red-50 dark:bg-red-900/20' : 'border-slate-200 dark:border-slate-800'}`}
-                    onPress={() => setNovaTransacao({...novaTransacao, tipo: 'despesa', categoria: ''})}
-                  >
-                    <Text className={`font-semibold ${novaTransacao.tipo === 'despesa' ? 'text-red-600' : 'text-slate-500'}`}>💸 Despesa</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity 
-                    className={`flex-1 py-3 rounded-xl border-2 items-center ${novaTransacao.tipo === 'receita' ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'border-slate-200 dark:border-slate-800'}`}
-                    onPress={() => setNovaTransacao({...novaTransacao, tipo: 'receita', categoria: ''})}
-                  >
-                    <Text className={`font-semibold ${novaTransacao.tipo === 'receita' ? 'text-green-600' : 'text-slate-500'}`}>💰 Receita</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
+                <Heading size="lg" className={`${theme.text} font-extrabold tracking-tight text-center`}>Nova Transação</Heading>
 
-              {/* Valor e Data */}
-              <View className="flex-row gap-4 mt-6">
-                <View className="flex-1">
-                  <Text className="font-semibold text-slate-700 dark:text-slate-300 mb-2">Valor (R$)</Text>
-                  <TextInput
-                    className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3.5 text-slate-900 dark:text-white font-semibold text-lg"
-                    placeholder="0,00"
-                    placeholderTextColor="#94a3b8"
-                    keyboardType="numeric"
-                    value={novaTransacao.valor ? formatarMoeda(novaTransacao.valor).replace(/^R\$\s*/, '') : ''}
-                    onChangeText={handleValorChange}
-                  />
-                </View>
-                <View className="flex-1">
-                  <Text className="font-semibold text-slate-700 dark:text-slate-300 mb-2">Data</Text>
-                  <TextInput
-                    className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3.5 text-slate-900 dark:text-white font-semibold text-lg"
-                    placeholder="YYYY-MM-DD"
-                    placeholderTextColor="#94a3b8"
-                    value={novaTransacao.data}
-                    onChangeText={v => setNovaTransacao({...novaTransacao, data: v})}
-                  />
-                </View>
-              </View>
-
-              {/* Categoria */}
-              <View className="mt-6">
-                <Text className="font-semibold text-slate-700 dark:text-slate-300 mb-2">Categoria</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-row gap-2">
-                  {(CATEGORIAS[novaTransacao.tipo] || []).map(cat => (
-                    <TouchableOpacity 
-                      key={cat}
-                      className={`px-4 py-2 rounded-full border ${novaTransacao.categoria === cat ? 'bg-blue-600 border-blue-600' : 'bg-transparent border-slate-300 dark:border-slate-700'} mr-2`}
-                      onPress={() => setNovaTransacao({...novaTransacao, categoria: cat})}
+                {/* Tipo */}
+                <VStack space="xs">
+                  <Text className={`text-xs font-semibold uppercase tracking-wider ${theme.textMuted}`}>Tipo de Fluxo</Text>
+                  <HStack space="md">
+                    <Button
+                      className={`flex-1 rounded-2xl py-3 h-auto border-2 justify-center items-center ${novaTransacao.tipo === 'despesa' ? 'border-rose-500 bg-rose-500/10' : `${theme.borderInactive} bg-transparent`}`}
+                      onPress={() => setNovaTransacao({ ...novaTransacao, tipo: 'despesa', categoria: '', parcelar: false, recorrente: false })}
                     >
-                      <Text className={`font-semibold ${novaTransacao.categoria === cat ? 'text-white' : 'text-slate-600 dark:text-slate-400'}`}>{cat}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
+                      <ButtonText className={novaTransacao.tipo === 'despesa' ? 'text-rose-400 font-bold' : `${theme.textSubtle} font-medium`}> Despesa</ButtonText>
+                    </Button>
+                    <Button
+                      className={`flex-1 rounded-2xl py-3 h-auto border-2 justify-center items-center ${novaTransacao.tipo === 'receita' ? 'border-emerald-500 bg-emerald-500/10' : `${theme.borderInactive} bg-transparent`}`}
+                      onPress={() => setNovaTransacao({ ...novaTransacao, tipo: 'receita', categoria: '', parcelar: false, recorrente: false })}
+                    >
+                      <ButtonText className={novaTransacao.tipo === 'receita' ? 'text-emerald-400 font-bold' : `${theme.textSubtle} font-medium`}> Receita</ButtonText>
+                    </Button>
+                  </HStack>
+                </VStack>
 
-              {/* Descrição */}
-              <View className="mt-6 mb-8">
-                <Text className="font-semibold text-slate-700 dark:text-slate-300 mb-2">Descrição (Opcional)</Text>
-                <TextInput
-                  className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3.5 text-slate-900 dark:text-white"
-                  placeholder="Ex: Conta de luz, Almoço..."
-                  placeholderTextColor="#94a3b8"
-                  value={novaTransacao.descricao}
-                  onChangeText={v => setNovaTransacao({...novaTransacao, descricao: v})}
-                />
-              </View>
+                {/* Valor e Data */}
+                <HStack space="md">
+                  <VStack space="xs" className="flex-1">
+                    <Text className={`text-xs font-semibold uppercase tracking-wider ${theme.textMuted}`}>Valor (R$)</Text>
+                    <Input variant="outline" size="xl" className={theme.inputCls}>
+                      <InputField
+                        placeholder="0,00"
+                        placeholderTextColor={theme.placeholder}
+                        keyboardType="numeric"
+                        className={`${theme.text} font-bold text-lg`}
+                        value={novaTransacao.valor ? formatarMoeda(novaTransacao.valor).replace(/^R\$\s*/, '') : ''}
+                        onChangeText={handleValorChange}
+                      />
+                    </Input>
+                  </VStack>
+                  <VStack space="xs" className="flex-1">
+                    <Text className={`text-xs font-semibold uppercase tracking-wider ${theme.textMuted}`}>Data</Text>
+                    <Input variant="outline" size="xl" className={theme.inputCls}>
+                      <InputField
+                        placeholder="YYYY-MM-DD"
+                        placeholderTextColor={theme.placeholder}
+                        className={`${theme.text} font-semibold text-base`}
+                        value={novaTransacao.data}
+                        onChangeText={v => setNovaTransacao({ ...novaTransacao, data: v })}
+                      />
+                    </Input>
+                  </VStack>
+                </HStack>
 
-              <TouchableOpacity 
-                className="bg-blue-600 active:bg-blue-700 rounded-xl py-4 items-center justify-center shadow-lg shadow-blue-500/30"
-                onPress={handleAdicionar}
-                disabled={submitting}
-              >
-                {submitting ? (
-                  <ActivityIndicator color="white" />
-                ) : (
-                  <Text className="text-white font-semibold text-base">Salvar Transação</Text>
+                {/* Categoria */}
+                <VStack space="xs">
+                  <Text className={`text-xs font-semibold uppercase tracking-wider ${theme.textMuted}`}>Categoria</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    <HStack space="xs">
+                      {(CATEGORIAS[novaTransacao.tipo] || []).map(cat => (
+                        <Button
+                          key={cat}
+                          className={`rounded-full px-5 py-2 border-2 ${novaTransacao.categoria === cat ? 'bg-blue-600 border-blue-500' : `bg-transparent ${theme.borderInactive}`}`}
+                          onPress={() => setNovaTransacao({ ...novaTransacao, categoria: cat })}
+                        >
+                          <ButtonText className={`text-xs font-bold ${novaTransacao.categoria === cat ? 'text-white' : theme.textMuted}`}>{cat}</ButtonText>
+                        </Button>
+                      ))}
+                    </HStack>
+                  </ScrollView>
+                </VStack>
+
+                {/* Descrição */}
+                <VStack space="xs">
+                  <Text className={`text-xs font-semibold uppercase tracking-wider ${theme.textMuted}`}>Descrição (Opcional)</Text>
+                  <Input variant="outline" size="xl" className={theme.inputCls}>
+                    <InputField
+                      placeholder="Ex: Conta de luz, Almoço..."
+                      placeholderTextColor={theme.placeholder}
+                      className={`${theme.text} text-sm`}
+                      value={novaTransacao.descricao}
+                      onChangeText={v => setNovaTransacao({ ...novaTransacao, descricao: v })}
+                    />
+                  </Input>
+                </VStack>
+
+                {/* Parcelamento — só para despesa */}
+                {novaTransacao.tipo === 'despesa' && (
+                  <VStack space="sm">
+                    <Text className={`text-xs font-semibold uppercase tracking-wider ${theme.textMuted}`}>Parcelamento</Text>
+                    <Button
+                      className={`rounded-2xl py-3 h-auto border-2 justify-center items-center ${novaTransacao.parcelar ? 'border-amber-500 bg-amber-500/10' : `${theme.borderInactive} bg-transparent`}`}
+                      onPress={() => setNovaTransacao({ ...novaTransacao, parcelar: !novaTransacao.parcelar })}
+                    >
+                      <ButtonText className={novaTransacao.parcelar ? 'text-amber-400 font-bold' : `${theme.textSubtle} font-medium`}>
+                        {novaTransacao.parcelar ? ' Parcelado ativo' : ' Parcelar compra'}
+                      </ButtonText>
+                    </Button>
+                    {novaTransacao.parcelar && (
+                      <HStack space="sm" className="items-center">
+                        <Text className={`text-sm flex-1 ${theme.textMuted}`}>Número de parcelas</Text>
+                        <Input variant="outline" size="md" className={`${theme.inputCls} w-24`}>
+                          <InputField
+                            placeholder="Ex: 12"
+                            placeholderTextColor={theme.placeholder}
+                            keyboardType="numeric"
+                            className={`${theme.text} font-bold text-center`}
+                            value={novaTransacao.numeroParcelas}
+                            onChangeText={v => setNovaTransacao({ ...novaTransacao, numeroParcelas: v.replace(/\D/g, '') })}
+                          />
+                        </Input>
+                      </HStack>
+                    )}
+                    {novaTransacao.parcelar && novaTransacao.valor && novaTransacao.numeroParcelas > 0 && (
+                      <Text className={`text-xs ${theme.textSubtle} text-center`}>
+                        {novaTransacao.numeroParcelas}x de {formatarMoeda(parseFloat(novaTransacao.valor) / parseInt(novaTransacao.numeroParcelas || '1', 10))}
+                      </Text>
+                    )}
+                  </VStack>
                 )}
-              </TouchableOpacity>
-              
-              {/* Espaço em branco no final para o scroll ficar confortável */}
-              <View className="h-10" />
+
+                {/* Recorrência — só para receita */}
+                {novaTransacao.tipo === 'receita' && (
+                  <VStack space="sm">
+                    <Text className={`text-xs font-semibold uppercase tracking-wider ${theme.textMuted}`}>Recorrência</Text>
+                    <Button
+                      className={`rounded-2xl py-3 h-auto border-2 justify-center items-center ${novaTransacao.recorrente ? 'border-emerald-500 bg-emerald-500/10' : `${theme.borderInactive} bg-transparent`}`}
+                      onPress={() => setNovaTransacao({ ...novaTransacao, recorrente: !novaTransacao.recorrente })}
+                    >
+                      <ButtonText className={novaTransacao.recorrente ? 'text-emerald-400 font-bold' : `${theme.textSubtle} font-medium`}>
+                        {novaTransacao.recorrente ? 'Ganho fixo ativo' : 'Configurar como ganho fixo'}
+                      </ButtonText>
+                    </Button>
+                    {novaTransacao.recorrente && (
+                      <HStack space="sm" className="items-center">
+                        <Text className={`text-sm flex-1 ${theme.textMuted}`}>Repetir por (meses)</Text>
+                        <Input variant="outline" size="md" className={`${theme.inputCls} w-24`}>
+                          <InputField
+                            placeholder="Ex: 12"
+                            placeholderTextColor={theme.placeholder}
+                            keyboardType="numeric"
+                            className={`${theme.text} font-bold text-center`}
+                            value={novaTransacao.mesesRecorrencia}
+                            onChangeText={v => setNovaTransacao({ ...novaTransacao, mesesRecorrencia: v.replace(/\D/g, '') })}
+                          />
+                        </Input>
+                      </HStack>
+                    )}
+                  </VStack>
+                )}
+
+                {/* Confirmar */}
+                <Button
+                  size="xl"
+                  className="w-full rounded-2xl bg-blue-600 active:bg-blue-700 py-4 h-auto shadow-lg mt-4"
+                  onPress={handleAdicionar}
+                  isDisabled={submitting}
+                >
+                  {submitting ? (
+                    <Spinner className="text-white" />
+                  ) : (
+                    <ButtonText className="text-white font-extrabold text-base h-auto tracking-wide">
+                      {novaTransacao.parcelar && novaTransacao.numeroParcelas > 1
+                        ? `PARCELAR EM ${novaTransacao.numeroParcelas}X`
+                        : novaTransacao.recorrente && novaTransacao.mesesRecorrencia > 1
+                        ? `REGISTRAR ${novaTransacao.mesesRecorrencia} MESES`
+                        : 'CONFIRMAR REGISTRO'}
+                    </ButtonText>
+                  )}
+                </Button>
+
+              </VStack>
             </ScrollView>
-          </View>
-        </KeyboardAvoidingView>
+          </Box>
+        </Box>
       </Modal>
 
     </SafeAreaView>

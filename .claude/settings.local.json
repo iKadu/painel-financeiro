@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.expo.dev)",
+      "Bash(npx expo *)",
+      "Bash(node -e \"const p = require\\('./package.json'\\); console.log\\('reanimated:', p.dependencies['react-native-reanimated']\\)\")"
+    ]
+  }
+}

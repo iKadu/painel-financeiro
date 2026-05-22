@@ -258,7 +258,7 @@ function Home() {
           <Dialog open={dialogAberto} onOpenChange={setDialogAberto}>
             <DialogTrigger asChild>
               <Button className="gap-2 shadow-md shadow-primary/20">
-                <Plus className="h-4 w-4" />
+                <Plus className="h-4 w-4 shrink-0" />
                 Nova Transação
               </Button>
             </DialogTrigger>

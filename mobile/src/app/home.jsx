@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { FlatList, Alert, ScrollView, Modal, TouchableOpacity } from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import { FlatList, Alert, ScrollView, Modal, TouchableOpacity, AppState } from 'react-native';
 import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -9,6 +9,7 @@ import {
   getTransacoesLocal, getExcluidasLocal, getResumoLocal,
   criarTransacao, excluirTransacao, restaurarTransacao,
 } from '../services/database';
+import { syncWithServer } from '../services/sync';
 
 import { Box } from '@/components/ui/box';
 import { VStack } from '@/components/ui/vstack';
@@ -52,6 +53,13 @@ export default function HomeScreen() {
     recorrente: false,
     mesesRecorrencia: '12',
   });
+
+  // Refs so AppState closure always has the latest values
+  const mesSel = useRef(mesSelecionado);
+  const anoSel = useRef(anoSelecionado);
+  const emailRef = useRef('');
+  useEffect(() => { mesSel.current = mesSelecionado; }, [mesSelecionado]);
+  useEffect(() => { anoSel.current = anoSelecionado; }, [anoSelecionado]);
 
   const theme = isDark ? {
     pageBg: 'bg-slate-950',
@@ -114,8 +122,11 @@ export default function HomeScreen() {
       const em = savedEmail || '';
       setNome(savedNome || '');
       setEmail(em);
+      emailRef.current = em;
       await initDatabase();
       await carregarDados(mesSelecionado, anoSelecionado, em);
+      const synced = await syncWithServer();
+      if (synced) await carregarDados(mesSelecionado, anoSelecionado, em);
     };
     init();
   }, []);
@@ -123,6 +134,17 @@ export default function HomeScreen() {
   useEffect(() => {
     if (email) carregarDados(mesSelecionado, anoSelecionado, email);
   }, [mesSelecionado, anoSelecionado]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'active') {
+        syncWithServer().then(ok => {
+          if (ok) carregarDados(mesSel.current, anoSel.current, emailRef.current);
+        });
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   const carregarDados = async (mes, ano, emailParam) => {
     const em = emailParam ?? email;

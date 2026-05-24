@@ -9,65 +9,191 @@ import { Text } from '@/components/ui/text';
 import { Heading } from '@/components/ui/heading';
 import { Input, InputField } from '@/components/ui/input';
 import { Button, ButtonText } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 
-export default function BemVindoScreen() {
+import api from '../services/api';
+
+export default function IndexScreen() {
+  const [modo, setModo] = useState('login'); // 'login' | 'cadastro'
   const [nome, setNome] = useState('');
+  const [email, setEmail] = useState('');
+  const [senha, setSenha] = useState('');
   const [loading, setLoading] = useState(false);
+  const [erro, setErro] = useState('');
 
   useEffect(() => {
-    const checarPerfil = async () => {
-      const nomeSalvo = await AsyncStorage.getItem('nome');
-      if (nomeSalvo) router.replace('/home');
+    const checarToken = async () => {
+      const token = await AsyncStorage.getItem('token');
+      if (token) router.replace('/home');
     };
-    checarPerfil();
+    checarToken();
   }, []);
 
-  const handleEntrar = async () => {
-    const nomeTrimado = nome.trim();
-    if (!nomeTrimado) return;
+  const handleLogin = async () => {
+    if (!email.trim() || !senha.trim()) {
+      setErro('Preencha o e-mail e a senha.');
+      return;
+    }
+    setErro('');
     setLoading(true);
-    await AsyncStorage.setItem('nome', nomeTrimado);
-    await AsyncStorage.setItem('email', nomeTrimado.toLowerCase().replace(/\s+/g, '.'));
-    router.replace('/home');
+    try {
+      const { data } = await api.post('/auth/login', { email: email.trim(), senha });
+      await AsyncStorage.setItem('token', data.token);
+      await AsyncStorage.setItem('nome', data.nome);
+      await AsyncStorage.setItem('email', email.trim().toLowerCase());
+      router.replace('/home');
+    } catch (err) {
+      const msg = err?.response?.data?.erro || err?.response?.data?.mensagem || 'Erro ao fazer login.';
+      setErro(msg);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  return (
-    <SafeAreaView className="flex-1 bg-white dark:bg-slate-950">
-      <VStack className="flex-1 justify-center px-6">
+  const handleCadastro = async () => {
+    if (!nome.trim() || !email.trim() || !senha.trim()) {
+      setErro('Preencha todos os campos.');
+      return;
+    }
+    setErro('');
+    setLoading(true);
+    try {
+      await api.post('/auth/cadastrar', { nome: nome.trim(), email: email.trim(), senha });
+      setErro('');
+      setModo('login');
+      setNome('');
+      setSenha('');
+      // Show success hint — user must log in after registering
+      setErro('Conta criada! Faça login para continuar.');
+    } catch (err) {
+      const msg = err?.response?.data?.erro || err?.response?.data?.mensagem || 'Erro ao cadastrar.';
+      setErro(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-        <VStack className="items-center mb-12">
-          <Box className="h-20 w-20 bg-blue-600 rounded-3xl items-center justify-center shadow-lg shadow-blue-500/30 mb-4">
-            <Text className="text-white font-bold text-3xl">F</Text>
+  const handleSubmit = () => {
+    if (modo === 'login') handleLogin();
+    else handleCadastro();
+  };
+
+  const isSuccess = modo === 'login' && erro.startsWith('Conta criada');
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#020617' }}>
+      <VStack style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 24 }}>
+
+        {/* Logo */}
+        <VStack style={{ alignItems: 'center', marginBottom: 48 }}>
+          <Box
+            style={{
+              height: 80, width: 80, backgroundColor: '#2563eb',
+              borderRadius: 24, alignItems: 'center', justifyContent: 'center',
+              marginBottom: 16,
+            }}
+          >
+            <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 30 }}>F</Text>
           </Box>
-          <Heading size="3xl" className="text-slate-900 dark:text-white font-extrabold">Financiária</Heading>
-          <Text className="text-slate-500 dark:text-slate-400 mt-2 text-center">
-            Seu controle financeiro pessoal,{'\n'}salvo direto no seu celular
+          <Heading size="3xl" className="text-white font-extrabold">Financiária</Heading>
+          <Text className="text-slate-400 mt-2 text-center">
+            {modo === 'login' ? 'Entre na sua conta' : 'Crie sua conta gratuita'}
           </Text>
         </VStack>
 
+        {/* Form */}
         <VStack space="md">
+
+          {/* Nome — only in cadastro mode */}
+          {modo === 'cadastro' && (
+            <VStack space="xs">
+              <Text className="text-sm font-semibold text-slate-300 ml-1">Nome</Text>
+              <Input variant="outline" size="xl" className="rounded-2xl border-slate-800">
+                <InputField
+                  placeholder="Seu nome completo"
+                  placeholderTextColor="#475569"
+                  value={nome}
+                  onChangeText={setNome}
+                  autoCapitalize="words"
+                  className="text-white"
+                />
+              </Input>
+            </VStack>
+          )}
+
+          {/* Email */}
           <VStack space="xs">
-            <Text className="text-sm font-semibold text-slate-700 dark:text-slate-300 ml-1">Como quer ser chamado?</Text>
-            <Input variant="outline" size="xl" className="rounded-2xl border-slate-200 dark:border-slate-800">
+            <Text className="text-sm font-semibold text-slate-300 ml-1">E-mail</Text>
+            <Input variant="outline" size="xl" className="rounded-2xl border-slate-800">
               <InputField
-                placeholder="Seu nome"
-                value={nome}
-                onChangeText={setNome}
-                autoFocus
-                returnKeyType="done"
-                onSubmitEditing={handleEntrar}
+                placeholder="seu@email.com"
+                placeholderTextColor="#475569"
+                value={email}
+                onChangeText={setEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                className="text-white"
               />
             </Input>
           </VStack>
 
+          {/* Senha */}
+          <VStack space="xs">
+            <Text className="text-sm font-semibold text-slate-300 ml-1">Senha</Text>
+            <Input variant="outline" size="xl" className="rounded-2xl border-slate-800">
+              <InputField
+                placeholder="••••••••"
+                placeholderTextColor="#475569"
+                value={senha}
+                onChangeText={setSenha}
+                secureTextEntry
+                returnKeyType="done"
+                onSubmitEditing={handleSubmit}
+                className="text-white"
+              />
+            </Input>
+          </VStack>
+
+          {/* Error / success message */}
+          {erro ? (
+            <Text
+              className={`text-sm text-center font-semibold ${isSuccess ? 'text-emerald-400' : 'text-rose-400'}`}
+            >
+              {erro}
+            </Text>
+          ) : null}
+
+          {/* Submit button */}
           <Button
             size="xl"
-            isDisabled={loading || !nome.trim()}
-            onPress={handleEntrar}
-            className="rounded-2xl py-4 h-auto mt-2 bg-blue-600 active:bg-blue-700 shadow-lg shadow-blue-500/30"
+            isDisabled={loading}
+            onPress={handleSubmit}
+            className="rounded-2xl py-4 h-auto mt-2 bg-blue-600 active:bg-blue-700"
           >
-            <ButtonText className="text-white font-extrabold text-base tracking-wide">COMEÇAR</ButtonText>
+            {loading ? (
+              <Spinner className="text-white" />
+            ) : (
+              <ButtonText className="text-white font-extrabold text-base tracking-wide">
+                {modo === 'login' ? 'ENTRAR' : 'CRIAR CONTA'}
+              </ButtonText>
+            )}
           </Button>
+
+          {/* Toggle mode */}
+          <Button
+            variant="link"
+            size="sm"
+            onPress={() => { setModo(m => m === 'login' ? 'cadastro' : 'login'); setErro(''); }}
+            className="mt-1"
+          >
+            <ButtonText className="text-slate-400 text-sm">
+              {modo === 'login'
+                ? 'Não tem conta? Cadastre-se'
+                : 'Já tem conta? Fazer login'}
+            </ButtonText>
+          </Button>
+
         </VStack>
 
       </VStack>

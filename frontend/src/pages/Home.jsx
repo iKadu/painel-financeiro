@@ -54,6 +54,10 @@ function Home() {
     valor: '',
     descricao: '',
     data: new Date().toISOString().split('T')[0],
+    parcelar: false,
+    numeroParcelas: '2',
+    recorrente: false,
+    mesesRecorrencia: '12',
   });
 
   const navigate = useNavigate();
@@ -94,13 +98,61 @@ function Home() {
     navigate('/login');
   };
 
+  const addMonths = (dateStr, months) => {
+    const d = new Date(dateStr + 'T12:00:00');
+    d.setMonth(d.getMonth() + months);
+    return d.toISOString().split('T')[0];
+  };
+
   const handleAdicionar = async (e) => {
     e.preventDefault();
+    const isParcelas = novaTransacao.tipo === 'despesa' && novaTransacao.parcelar;
+    const isRecorrente = novaTransacao.tipo === 'receita' && novaTransacao.recorrente;
+    const n = isParcelas ? parseInt(novaTransacao.numeroParcelas, 10) || 1
+             : isRecorrente ? parseInt(novaTransacao.mesesRecorrencia, 10) || 1
+             : 1;
+
+    if ((isParcelas || isRecorrente) && (n < 1 || n > 60)) {
+      alert('Informe um número entre 1 e 60.');
+      return;
+    }
+
     try {
-      await api.post('/transacoes', novaTransacao);
+      if (isParcelas) {
+        const valorParcela = (parseFloat(novaTransacao.valor) / n).toFixed(2);
+        for (let i = 0; i < n; i++) {
+          await api.post('/transacoes', {
+            tipo: 'despesa',
+            categoria: novaTransacao.categoria,
+            valor: valorParcela,
+            descricao: `${novaTransacao.descricao ? novaTransacao.descricao + ' ' : ''}(${i + 1}/${n})`,
+            data: addMonths(novaTransacao.data, i),
+          });
+        }
+      } else if (isRecorrente) {
+        for (let i = 0; i < n; i++) {
+          await api.post('/transacoes', {
+            tipo: 'receita',
+            categoria: novaTransacao.categoria,
+            valor: novaTransacao.valor,
+            descricao: novaTransacao.descricao || '',
+            data: addMonths(novaTransacao.data, i),
+          });
+        }
+      } else {
+        await api.post('/transacoes', {
+          tipo: novaTransacao.tipo,
+          categoria: novaTransacao.categoria,
+          valor: novaTransacao.valor,
+          descricao: novaTransacao.descricao,
+          data: novaTransacao.data,
+        });
+      }
       setNovaTransacao({
         tipo: 'despesa', categoria: '', valor: '', descricao: '',
         data: new Date().toISOString().split('T')[0],
+        parcelar: false, numeroParcelas: '2',
+        recorrente: false, mesesRecorrencia: '12',
       });
       setDialogAberto(false);
       carregarDados();
@@ -346,6 +398,75 @@ function Home() {
                   />
                 </div>
 
+                {/* Parcelamento — só para despesa */}
+                {novaTransacao.tipo === 'despesa' && (
+                  <div className="space-y-2">
+                    <Label>Parcelamento</Label>
+                    <button
+                      type="button"
+                      onClick={() => setNovaTransacao({ ...novaTransacao, parcelar: !novaTransacao.parcelar })}
+                      className={`w-full rounded-lg px-4 py-2.5 text-sm font-medium border-2 transition-colors ${
+                        novaTransacao.parcelar
+                          ? 'border-amber-500 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                          : 'border-border bg-transparent text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      {novaTransacao.parcelar ? '✓ Parcelado ativo' : 'Parcelar compra'}
+                    </button>
+                    {novaTransacao.parcelar && (
+                      <div className="flex items-center gap-3">
+                        <Label htmlFor="parcelas" className="flex-1 text-sm">Número de parcelas</Label>
+                        <Input
+                          id="parcelas"
+                          type="number"
+                          min="2"
+                          max="60"
+                          value={novaTransacao.numeroParcelas}
+                          onChange={e => setNovaTransacao({ ...novaTransacao, numeroParcelas: e.target.value.replace(/\D/g, '') })}
+                          className="w-24 text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        />
+                      </div>
+                    )}
+                    {novaTransacao.parcelar && novaTransacao.valor && parseInt(novaTransacao.numeroParcelas, 10) > 0 && (
+                      <p className="text-xs text-center text-muted-foreground">
+                        {novaTransacao.numeroParcelas}x de {formatarMoeda(parseFloat(novaTransacao.valor) / (parseInt(novaTransacao.numeroParcelas, 10) || 1))}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Recorrência — só para receita */}
+                {novaTransacao.tipo === 'receita' && (
+                  <div className="space-y-2">
+                    <Label>Receita Fixa</Label>
+                    <button
+                      type="button"
+                      onClick={() => setNovaTransacao({ ...novaTransacao, recorrente: !novaTransacao.recorrente })}
+                      className={`w-full rounded-lg px-4 py-2.5 text-sm font-medium border-2 transition-colors ${
+                        novaTransacao.recorrente
+                          ? 'border-emerald-500 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                          : 'border-border bg-transparent text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      {novaTransacao.recorrente ? '✓ Ganho fixo ativo' : 'Configurar como ganho fixo'}
+                    </button>
+                    {novaTransacao.recorrente && (
+                      <div className="flex items-center gap-3">
+                        <Label htmlFor="meses" className="flex-1 text-sm">Repetir por (meses)</Label>
+                        <Input
+                          id="meses"
+                          type="number"
+                          min="2"
+                          max="60"
+                          value={novaTransacao.mesesRecorrencia}
+                          onChange={e => setNovaTransacao({ ...novaTransacao, mesesRecorrencia: e.target.value.replace(/\D/g, '') })}
+                          className="w-24 text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <DialogFooter className="pt-2">
                   <Button type="button" variant="outline" onClick={() => setDialogAberto(false)}>
                     Cancelar
@@ -354,7 +475,11 @@ function Home() {
                     type="submit"
                     disabled={!novaTransacao.categoria || !novaTransacao.valor}
                   >
-                    Adicionar
+                    {novaTransacao.parcelar && parseInt(novaTransacao.numeroParcelas, 10) > 1
+                      ? `Parcelar em ${novaTransacao.numeroParcelas}x`
+                      : novaTransacao.recorrente && parseInt(novaTransacao.mesesRecorrencia, 10) > 1
+                      ? `Registrar por ${novaTransacao.mesesRecorrencia} meses`
+                      : 'Adicionar'}
                   </Button>
                 </DialogFooter>
               </form>

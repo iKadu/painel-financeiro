@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // Em desenvolvimento: emulador Android usa 10.0.2.2, dispositivo físico usa o IP da máquina
 // Em produção: substitua pela URL do Railway após o deploy
 const DEV_URL = 'http://10.0.2.2:3001';
-const PROD_URL = 'https://COLOQUE_SUA_URL_RAILWAY_AQUI.railway.app';
+const PROD_URL = 'https://painel-financeiro-production-70fc.up.railway.app';
 
 const api = axios.create({
   baseURL: __DEV__ ? DEV_URL : PROD_URL,
